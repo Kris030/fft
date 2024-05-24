@@ -2,64 +2,103 @@
 #![feature(iter_array_chunks)]
 #![feature(split_array)]
 
+use std::{fs::File, io::BufReader, time::Duration};
+
 use colors_transform::Color;
 use num::{complex::Complex32 as C32, Zero};
 
 pub mod fft;
 use fft::fft;
+use rodio::Source;
 
-fn main() -> anyhow::Result<()> {
-    const SAMPLE_SIZE: usize = 1 << 12;
-    const STEP: usize = 2;
-    const OVERLAP: usize = SAMPLE_SIZE / STEP;
+fn draw_spectogram<S, C>(
+    source: S,
+    channels: u16,
+    duration: Duration,
+    sample_rate: u32,
+    sample_size: usize,
+    step: usize,
+    mut color: C,
+) -> anyhow::Result<image::RgbImage>
+where
+    <S as Iterator>::Item: rodio::Sample,
+    f32: rodio::cpal::FromSample<<S as Iterator>::Item> + rodio::Sample,
+    S: rodio::Source,
+    C: FnMut(f32) -> image::Rgb<u8>,
+{
+    let overlap: usize = sample_size / step;
 
-    let mut reader = hound::WavReader::open("test2.wav")?;
-    let channels = reader.spec().channels as usize;
-    let duration = reader.duration();
+    let mut img = image::RgbImage::new(
+        (duration.as_secs() as u32 * sample_rate).div_ceil(overlap as u32),
+        sample_size as u32 / 2,
+    );
 
-    let mut source = reader
-        .samples::<i16>()
-        .step_by(channels)
-        .map(|s| C32::new(s.unwrap() as f32 / i16::MAX as f32, 0.))
+    let mut source = source
+        .convert_samples::<f32>()
+        .step_by(channels as usize)
+        .map(C32::from)
         .chain(std::iter::repeat(C32::zero()));
 
-    let mut img = image::RgbImage::new(duration.div_ceil(OVERLAP as u32), SAMPLE_SIZE as u32 / 2);
-
-    let mut c = [C32::zero(); SAMPLE_SIZE];
+    let mut buff = vec![C32::zero(); sample_size];
     for x in 0..img.width() {
         if x % 256 == 0 {
             eprintln!("x: {x}");
         }
 
         // copy the second half into to first half
-        c.copy_within((SAMPLE_SIZE - OVERLAP)..SAMPLE_SIZE, 0);
+        buff.copy_within((sample_size - overlap)..sample_size, 0);
 
         // fill the second with new data
-        let b = &mut c[(SAMPLE_SIZE - OVERLAP)..];
-        b.fill_with(|| source.next().unwrap());
+        buff[(sample_size - overlap)..].fill_with(|| source.next().expect("Not enough samples???"));
 
-        let freqs = fft::<f32, false>(&c);
+        let freqs = fft::<f32, false>(&buff);
 
         #[allow(clippy::needless_range_loop)]
-        for y in 0..(SAMPLE_SIZE / 2) {
+        for y in 0..(sample_size / 2) {
             let fq = freqs[y].norm();
+            img.put_pixel(x, img.height() - 1 - y as u32, color(fq));
+        }
+    }
 
+    println!(
+        "samples left: {}",
+        source.take_while(|c| !c.is_zero()).count()
+    );
+
+    Ok(img)
+}
+
+fn main() -> anyhow::Result<()> {
+    let reader = rodio::Decoder::new(BufReader::new(File::open("test2.wav")?))?;
+
+    let sample_rate = reader.sample_rate();
+    let channels = reader.channels();
+    let duration = reader
+        .total_duration()
+        .ok_or(anyhow::Error::msg("We don't know total duration"))?;
+
+    eprintln!("sample_rate: {sample_rate} channels: {channels} duration: {duration:?}");
+
+    const SAMPLE_SIZE: usize = 1 << 12;
+    const STEP: usize = 2;
+    let img = draw_spectogram(
+        reader,
+        channels,
+        duration,
+        sample_rate,
+        SAMPLE_SIZE,
+        STEP,
+        |fq| {
             let rgb: [f32; 3] = colors_transform::Hsl::from(fq * 360., 100., fq * 100.)
                 .to_rgb()
                 .as_tuple()
                 .into();
 
-            let rgb = rgb.map(|f| f as u8).into();
-
-            img.put_pixel(x, img.height() - 1 - y as u32, rgb);
-        }
-    }
+            rgb.map(|f| f as u8).into()
+        },
+    )?;
 
     img.save("test.png")?;
-    println!(
-        "samples left: {}",
-        source.take_while(|c| !c.is_zero()).count()
-    );
 
     Ok(())
 }
