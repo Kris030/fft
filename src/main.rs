@@ -26,11 +26,11 @@ where
     S: rodio::Source,
     C: FnMut(f32) -> image::Rgb<u8>,
 {
-    let overlap: usize = sample_size / step;
+    let overlap = sample_size / step;
 
     let mut img = image::RgbImage::new(
-        (duration.as_secs() as u32 * sample_rate).div_ceil(overlap as u32),
-        sample_size as u32 / 2,
+        (duration.as_secs() * sample_rate as u64).div_ceil(overlap as u64) as u32,
+        (sample_size / 2) as u32,
     );
 
     let mut source = source
@@ -79,15 +79,15 @@ fn main() -> anyhow::Result<()> {
 
     eprintln!("sample_rate: {sample_rate} channels: {channels} duration: {duration:?}");
 
-    const SAMPLE_SIZE: usize = 1 << 12;
-    const STEP: usize = 2;
+    let (sample_size, step) = (1 << 12, 2);
+
     let img = draw_spectogram(
         reader,
         channels,
         duration,
         sample_rate,
-        SAMPLE_SIZE,
-        STEP,
+        sample_size,
+        step,
         |fq| {
             let rgb: [f32; 3] = colors_transform::Hsl::from(fq * 360., 100., fq * 100.)
                 .to_rgb()
