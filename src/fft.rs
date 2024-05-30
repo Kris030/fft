@@ -2,7 +2,32 @@ use std::f64::consts::PI;
 
 use num::{cast::AsPrimitive, complex::Complex, Float, Zero};
 
-pub fn fft<T, const INVERSE: bool>(input: &[Complex<T>]) -> Vec<Complex<T>>
+pub fn fft<T>(input: &[Complex<T>]) -> Vec<Complex<T>>
+where
+    T: Float + 'static,
+    usize: AsPrimitive<T>,
+    f64: AsPrimitive<T>,
+{
+    fft_inner::<T, false>(input)
+}
+
+pub fn ifft<T>(input: &[Complex<T>]) -> Vec<Complex<T>>
+where
+    T: Float + 'static,
+    usize: AsPrimitive<T>,
+    f64: AsPrimitive<T>,
+{
+    let mut ret = fft_inner::<T, true>(input);
+
+    let d: T = ret.len().as_();
+    for c in &mut ret {
+        *c = *c / d;
+    }
+
+    ret
+}
+
+pub fn fft_inner<T, const INVERSE: bool>(input: &[Complex<T>]) -> Vec<Complex<T>>
 where
     T: Float + 'static,
     usize: AsPrimitive<T>,
@@ -15,11 +40,7 @@ where
     }
 
     let w: Complex<T> = Complex::from_polar(
-        if INVERSE {
-            T::one() / n.as_()
-        } else {
-            T::one()
-        },
+        T::one(),
         if INVERSE { -(2.as_()) } else { 2.as_() } * PI.as_() / n.as_(),
     );
 
@@ -28,7 +49,10 @@ where
         input.iter().copied().skip(1).step_by(2).collect::<Vec<_>>(),
     );
 
-    let (ye, yo) = (fft::<T, INVERSE>(&pe[..]), fft::<T, INVERSE>(&po[..]));
+    let (ye, yo) = (
+        fft_inner::<T, INVERSE>(&pe[..]),
+        fft_inner::<T, INVERSE>(&po[..]),
+    );
 
     let mut y = vec![Complex::zero(); n];
 
